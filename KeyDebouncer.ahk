@@ -1,40 +1,102 @@
 #Requires AutoHotkey v2.0
 #SingleInstance Force
 
-; ============================================
+; ============================================================
 ; Key Debouncer
-; ============================================
-; 指定したキーについて、一定時間内の連続入力を無視します。
+; ============================================================
+; キーを離した直後に発生するチャタリングを抑制します。
 ;
-; 形式:
-;   "キー名", デバウンス時間(ms)
-; ============================================
+; 前回の keyup から指定時間以内に発生した
+; 同じキーの keydown をチャタリングとして無視します。
+; ============================================================
 
 debounceConfig := Map(
     "r", 35
 )
 
-lastInput := Map()
+keyStates := Map()
 
-; 設定されたキーごとにHotkeyを登録
+; ------------------------------------------------------------
+; Hotkey登録
+; ------------------------------------------------------------
+
 for key, debounceMs in debounceConfig
 {
-    lastInput[key] := 0
-    Hotkey("$*" key, DebounceKey.Bind(key, debounceMs))
+    keyStates[key] := {
+        lastUp: A_TickCount - debounceMs,
+        down: false,
+        suppressed: false
+    }
+
+    Hotkey("$*" key, HandleKeyDown.Bind(key, debounceMs))
+    Hotkey("$*" key " up", HandleKeyUp.Bind(key))
 }
 
-DebounceKey(key, debounceMs, *)
-{
-    global lastInput
+; ------------------------------------------------------------
+; keydown
+; ------------------------------------------------------------
 
+HandleKeyDown(key, debounceMs, *)
+{
+    global keyStates
+
+    state := keyStates[key]
     now := A_TickCount
 
-    ; 前回受け付けた入力から指定時間が経過していなければ無視
-    if (now - lastInput[key] < debounceMs)
+    ; 長押し中のキーリピート
+    if state.down
+    {
+        if state.suppressed
+            return
+
+        Send "{Blind}{" key " down}"
         return
+    }
 
-    lastInput[key] := now
+    state.down := true
 
-    ; Shift / Ctrl / Altなどの状態を維持したまま送信
-    Send "{Blind}{" key "}"
+    ; --------------------------------------------------------
+    ; keyup直後の再入力をチャタリングとして除外
+    ; --------------------------------------------------------
+
+    if (now - state.lastUp < debounceMs)
+    {
+        state.suppressed := true
+        return
+    }
+
+    state.suppressed := false
+
+    Send "{Blind}{" key " down}"
+}
+
+; ------------------------------------------------------------
+; keyup
+; ------------------------------------------------------------
+
+HandleKeyUp(key, *)
+{
+    global keyStates
+
+    state := keyStates[key]
+
+    ; チャタリングとして抑制したkeydownに対応する
+    ; keyupも出力しない
+    if state.suppressed
+    {
+        state.suppressed := false
+        state.down := false
+
+        ; 抑制したkeyupを基準にデバウンス時間を延長
+        state.lastUp := A_TickCount
+        return
+    }
+
+    state.down := false
+
+    ; 正常なkeyupを先にWindowsへ送る
+    Send "{Blind}{" key " up}"
+
+    ; ★ Send後の時刻を記録する
+    state.lastUp := A_TickCount
 }
